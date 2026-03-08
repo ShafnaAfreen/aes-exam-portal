@@ -1,0 +1,110 @@
+.exam-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* LEFT SECTION */
+.exam-main {
+  flex: 3;
+  padding: 40px;
+}
+
+/* HEADER BAR */
+.exam-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.reg-number {
+  font-weight: 600;
+  font-size: 18px;
+}
+
+.timer {
+  font-weight: bold;
+  color: #e53935;
+  font-size: 18px;
+}
+
+/* QUESTION BOX */
+.question-box {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.05);
+}
+
+/* OPTIONS BOX */
+.options-box {
+  background: white;
+  padding: 25px;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.05);
+  margin-bottom: 25px;
+}
+
+.option-item {
+  display: block;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.option-item:hover {
+  background: #f1f5ff;
+}
+
+/* NAVIGATION */
+.navigation {
+  margin-top: 20px;
+  display: flex;
+  gap: 15px;
+}
+
+.navigation button {
+  padding: 10px 22px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  background: #1976d2;
+  color: white;
+}
+
+.submit-btn {
+  background: #43a047;
+}
+
+/* RIGHT SIDE */
+.question-palette {
+  flex: 1;
+  background: white;
+  padding: 30px;
+  border-left: 1px solid #ddd;
+}
+
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 15px;
+  margin-top: 15px;
+}
+
+.palette-item {
+  padding: 14px;
+  text-align: center;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.palette-item.attempted {
+  background: #43a047;
+  color: white;
+  border: none;
+}
