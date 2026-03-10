@@ -1,367 +1,396 @@
-import { useEffect, useState } from "react";
-import "../styles/Exam.css";
+import React, { useState, useEffect } from 'react';
+import { Clock, AlertTriangle, ShieldAlert, Loader2, RefreshCw } from 'lucide-react';
+import api from '../api';
 
-function Exam({ username, setPage }) {
+// Utility: Base64 to Uint8Array
+function base64ToBytes(base64) {
+  const binString = window.atob(base64);
+  return Uint8Array.from(binString, (m) => m.codePointAt(0));
+}
+
+// Utility: String to Uint8Array
+function stringToBytes(str) {
+  return new TextEncoder().encode(str);
+}
+
+// Utility: Generate or retrieve a consistent device ID
+function getDeviceId() {
+  let deviceId = localStorage.getItem('device_id');
+  if (!deviceId) {
+    deviceId = crypto.randomUUID();
+    localStorage.setItem('device_id', deviceId);
+  }
+  return deviceId;
+}
+
+export default function Exam() {
+  const [timeLeft, setTimeLeft] = useState(3600);
+  const [violations, setViolations] = useState([]);
+  const [showWarning, setShowWarning] = useState(false);
+  
+  // Exam State
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [totalQuestions, setTotalQuestions] = useState(0);
-  const [activeQuestion, setActiveQuestion] = useState(null);
-  const [current, setCurrent] = useState(0);
-  const [answers, setAnswers] = useState({});
-  const [timeLeft, setTimeLeft] = useState(300);
-  const [chunkError, setChunkError] = useState("");
-  const [metaLoading, setMetaLoading] = useState(true);
-  const [deviceId, setDeviceId] = useState("");
-  const [geo, setGeo] = useState(null);
+  const [questionImage, setQuestionImage] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [selectedAnswer, setSelectedAnswer] = useState("");
+  
+  const studentId = localStorage.getItem('student_id') || 'UNKNOWN';
 
-  const getOrCreateDeviceId = () => {
-    const key = "exam_device_id";
-    let id = localStorage.getItem(key);
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem(key, id);
-    }
-    return id;
-  };
-
-  const b64ToBytes = (b64) => {
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  };
-
-  const wipeBytes = (buf) => {
-    if (!buf) return;
-    buf.fill(0);
-  };
-
-  const deriveBindingKey = async (regNo, devId, latitude, longitude, timeWindow, saltBytes) => {
-    const geoCell = `${Number(latitude).toFixed(3)},${Number(longitude).toFixed(3)}`;
-    const prefix = `${regNo}|${devId}|${geoCell}|${timeWindow}|`;
-    const prefixBytes = new TextEncoder().encode(prefix);
-    const material = new Uint8Array(prefixBytes.length + saltBytes.length);
-    material.set(prefixBytes, 0);
-    material.set(saltBytes, prefixBytes.length);
-    const digest = await window.crypto.subtle.digest("SHA-256", material);
-    material.fill(0);
-    return new Uint8Array(digest);
-  };
-
-  const decryptChunk = async (chunkEnvelope) => {
-    const nowMs = Date.now();
-    if (nowMs > chunkEnvelope.expires_at_ms) {
-      throw new Error("Chunk key expired");
-    }
-
-    if (!geo) {
-      throw new Error("Missing geolocation");
-    }
-
-    const saltBytes = b64ToBytes(chunkEnvelope.binding_salt_b64);
-    const keyNonceBytes = b64ToBytes(chunkEnvelope.key_nonce_b64);
-    const wrappedKeyBytes = b64ToBytes(chunkEnvelope.wrapped_key_b64);
-    const nonceBytes = b64ToBytes(chunkEnvelope.nonce_b64);
-    const cipherBytes = b64ToBytes(chunkEnvelope.ciphertext_b64);
-
-    try {
-      const bindingKeyBytes = await deriveBindingKey(
-        username,
-        deviceId,
-        geo.lat,
-        geo.lon,
-        chunkEnvelope.time_window,
-        saltBytes
-      );
-      const bindingKey = await window.crypto.subtle.importKey(
-        "raw",
-        bindingKeyBytes,
-        "AES-GCM",
-        false,
-        ["decrypt"]
-      );
-      const unwrappedBuffer = await window.crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: keyNonceBytes },
-        bindingKey,
-        wrappedKeyBytes
-      );
-      const chunkKeyBytes = new Uint8Array(unwrappedBuffer);
-      const chunkKey = await window.crypto.subtle.importKey(
-        "raw",
-        chunkKeyBytes,
-        "AES-GCM",
-        false,
-        ["decrypt"]
-      );
-
-      const decryptedBuffer = await window.crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: nonceBytes },
-        chunkKey,
-        cipherBytes
-      );
-      const plaintext = new TextDecoder().decode(decryptedBuffer);
-      wipeBytes(bindingKeyBytes);
-      wipeBytes(chunkKeyBytes);
-      // The decrypted text is the raw base64 string of the image.
-      // We prepend the data URI scheme to render it directly in an <img> tag.
-      return `data:image/png;base64,${plaintext}`;
-    } finally {
-      wipeBytes(saltBytes);
-      wipeBytes(keyNonceBytes);
-      wipeBytes(wrappedKeyBytes);
-      wipeBytes(nonceBytes);
-      wipeBytes(cipherBytes);
-    }
-  };
-
-  useEffect(() => {
-    setDeviceId(getOrCreateDeviceId());
-  }, []);
-
-  useEffect(() => {
-    setChunkError("");
-    if (!("geolocation" in navigator)) {
-      setChunkError("Geolocation is not supported in this browser.");
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-  (pos) => {
-    console.log("CLIENT GEO:", pos.coords.latitude, pos.coords.longitude);
-
-    setGeo({
-      lat: pos.coords.latitude,
-      lon: pos.coords.longitude,
-    });
-
-    setChunkError("");
-  },
-      (err) => {
-        if (err.code === 1) {
-          setChunkError("Location permission denied. Allow location and retry.");
-          return;
-        }
-        if (err.code === 2) {
-          setChunkError("Location unavailable. Turn on GPS/location services and retry.");
-          return;
-        }
-        if (err.code === 3) {
-          setChunkError("Location request timed out. Retry in an open-sky/network-stable area.");
-          return;
-        }
-        setChunkError(
-          "Location access failed. Use localhost/https and ensure browser + OS location access are enabled."
-        );
-      },
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 120000 }
-    );
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-    fetch("http://localhost:5000/questions/meta", { signal: controller.signal })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data.message || "Failed to load exam metadata");
-        }
-        return data;
-      })
-      .then(data => {
-        setTotalQuestions(data.total || 0);
-        setChunkError("");
-      })
-      .catch((err) => {
-        if (err?.name === "AbortError") {
-          setChunkError("Backend not reachable (meta timeout). Check backend server on port 5000.");
-          return;
-        }
-        setChunkError(err?.message || "Failed to load exam metadata");
-      })
-      .finally(() => {
-        clearTimeout(timeoutId);
-        setMetaLoading(false);
-      });
-
-    return () => {
-      clearTimeout(timeoutId);
-      controller.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (totalQuestions === 0 || !deviceId || !geo) return;
-
-    let cancelled = false;
-    setActiveQuestion(null);
-    setChunkError("");
-
-    fetch(`http://localhost:5000/questions/chunk/${current}`, {
-      headers: {
-        "X-Registration-No": username,
-        "X-Device-Id": deviceId,
-        "X-Geo-Lat": String(geo.lat),
-        "X-Geo-Lon": String(geo.lon),
-      },
-    })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data.message || "Failed to load chunk");
-        }
-        return data;
-      })
-      .then(chunk => {
-        return decryptChunk(chunk);
-      })
-      .then(question => {
-        if (!cancelled) setActiveQuestion(question);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setChunkError(err?.message || "Unable to decrypt active question chunk.");
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      setActiveQuestion(null);
-    };
-  }, [current, totalQuestions, deviceId, geo, username]);
-
+  // Timer logic
   useEffect(() => {
     const timer = setInterval(() => {
-      setTimeLeft(prev => {
-  if (prev <= 1) {
-    clearInterval(timer);
-    setPage("submitted");
-    return 0;
-  }
-  return prev - 1;
-});
+      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timer);
   }, []);
-useEffect(() => {
-  const handleVisibility = () => {
-    if (document.hidden) {
-      alert("Tab switching detected. This action is recorded.");
+
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Violation Tracking
+  useEffect(() => {
+    const handleViolation = (type) => {
+      const timestamp = new Date().toLocaleTimeString();
+      const newViolation = { type, timestamp };
+      
+      setViolations((prev) => [...prev, newViolation]);
+      setShowWarning(true);
+      setTimeout(() => setShowWarning(false), 3000);
+      console.warn(`Violation Logged: ${type} at ${timestamp}`);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) handleViolation('Tab Switch Detected');
+    };
+
+    const handleWindowBlur = () => {
+      handleViolation('Window Blur/Loss of Focus');
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, []);
+
+  // Fetch Metadata & First Question
+  useEffect(() => {
+    const initExam = async () => {
+      try {
+        const metaRes = await api.get('/questions/meta');
+        setTotalQuestions(metaRes.data.total);
+        await fetchQuestion(0);
+      } catch (err) {
+        setErrorMsg(err.response?.data?.message || "Failed to initialize exam.");
+        setIsLoading(false);
+      }
+    };
+    initExam();
+  }, []);
+
+  const getGeolocation = () => {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error("Geolocation is not supported by your browser"));
+      } else {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        });
+      }
+    });
+  };
+
+  const fetchQuestion = async (index) => {
+    setIsLoading(true);
+    setErrorMsg("");
+    setQuestionImage(null);
+    setSelectedAnswer("");
+
+    try {
+      // 1. Get Geolocation
+      let geoData;
+      try {
+        geoData = await getGeolocation();
+      } catch (e) {
+        throw new Error("Location access required to fetch encrypted question chunk.");
+      }
+      
+      const lat = geoData.coords.latitude;
+      const lon = geoData.coords.longitude;
+      const deviceId = getDeviceId();
+
+      // 2. Fetch encrypted chunk
+      const res = await api.get(`/questions/chunk/${index}`, {
+        headers: {
+          'X-Registration-No': studentId,
+          'X-Device-Id': deviceId,
+          'X-Geo-Lat': lat.toString(),
+          'X-Geo-Lon': lon.toString()
+        }
+      });
+
+      const chunk = res.data;
+
+      // 3. Crypto Variables Prep
+      const nonce = base64ToBytes(chunk.nonce_b64);
+      const ciphertext = base64ToBytes(chunk.ciphertext_b64);
+      const bindingSalt = base64ToBytes(chunk.binding_salt_b64);
+      const keyNonce = base64ToBytes(chunk.key_nonce_b64);
+      const wrappedKey = base64ToBytes(chunk.wrapped_key_b64);
+      const timeWindow = chunk.time_window;
+
+      // 4. Derive Binding Key: SHA-256(reg_no|device_id|geo_lat,geo_lon|time_window|salt)
+      // Format lat/lon exactly as backend does: f"{geo_lat:.3f},{geo_lon:.3f}"
+      const geoCell = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+      const materialStr = `${studentId}|${deviceId}|${geoCell}|${timeWindow}|`;
+      
+      const materialBytes = stringToBytes(materialStr);
+      const combinedMaterial = new Uint8Array(materialBytes.length + bindingSalt.length);
+      combinedMaterial.set(materialBytes);
+      combinedMaterial.set(bindingSalt, materialBytes.length);
+
+      const bindingKeyDigest = await window.crypto.subtle.digest('SHA-256', combinedMaterial);
+
+      const bindingKey = await window.crypto.subtle.importKey(
+        'raw',
+        bindingKeyDigest,
+        { name: 'AES-GCM' },
+        false,
+        ['unwrapKey']
+      );
+
+      // 5. Unwrap the Ephemeral Key
+      const ephemeralKey = await window.crypto.subtle.unwrapKey(
+        'raw',
+        wrappedKey,
+        bindingKey,
+        { name: 'AES-GCM', iv: keyNonce },
+        { name: 'AES-GCM' },
+        false,
+        ['decrypt']
+      );
+
+      // 6. Decrypt the Image Payload
+      const decryptedBuffer = await window.crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: nonce },
+        ephemeralKey,
+        ciphertext
+      );
+
+      // 7. Convert decrypted bytes back to base64 string
+      const decryptedBytes = new Uint8Array(decryptedBuffer);
+      let binaryStr = '';
+      // Use chunking to avoid Maximum call stack size exceeded for large arrays
+      for (let i = 0; i < decryptedBytes.length; i += 10000) {
+        binaryStr += String.fromCharCode.apply(null, decryptedBytes.subarray(i, i + 10000));
+      }
+      
+      // The decrypted bytes from the backend is the base64 string of the image
+      const imageBase64Data = decodeURIComponent(escape(binaryStr));
+      
+      setQuestionImage(`data:image/jpeg;base64,${imageBase64Data}`);
+      setCurrentQuestionIndex(index);
+
+    } catch (err) {
+      console.error(err);
+      setErrorMsg(err.message || err.response?.data?.message || "Decryption or network error.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  document.addEventListener("visibilitychange", handleVisibility);
-
-  return () => {
-    document.removeEventListener("visibilitychange", handleVisibility);
-  };
-}, []);
-useEffect(() => {
-
-  const blockCopy = (e) => e.preventDefault();
-
-  document.addEventListener("copy", blockCopy);
-  document.addEventListener("cut", blockCopy);
-  document.addEventListener("contextmenu", blockCopy);
-
-  return () => {
-    document.removeEventListener("copy", blockCopy);
-    document.removeEventListener("cut", blockCopy);
-    document.removeEventListener("contextmenu", blockCopy);
+  const handleNext = () => {
+    if (currentQuestionIndex < totalQuestions - 1) {
+      fetchQuestion(currentQuestionIndex + 1);
+    }
   };
 
-}, []);
-  const handleAnswer = (option) => {
-    setAnswers({ ...answers, [current]: option });
+  const handlePrev = () => {
+    if (currentQuestionIndex > 0) {
+      fetchQuestion(currentQuestionIndex - 1);
+    }
   };
 
-  const formatTime = () => {
-    const m = Math.floor(timeLeft / 60);
-    const s = timeLeft % 60;
-    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  const handleSubmitExam = async () => {
+    setIsLoading(true);
+    try {
+      await api.post('/api/submit_exam', {
+        student_id: studentId,
+        violations: violations
+      });
+      localStorage.removeItem('student_id');
+      localStorage.removeItem('device_id');
+      window.location.href = '/login';
+    } catch (err) {
+      console.error(err);
+      setErrorMsg("Failed to submit exam. Please try again.");
+      setIsLoading(false);
+    }
   };
-
-  if (chunkError) return <p>{chunkError}</p>;
-  if (metaLoading) return <p>Loading...</p>;
-  if (totalQuestions === 0) return <p>Loading...</p>;
-  if (!activeQuestion) return <p>Decrypting active chunk...</p>;
 
   return (
-    <div className="exam-layout">
-
-      {/* LEFT SECTION */}
-      <div className="exam-main">
-
-        <div className="exam-topbar">
-          <div className="reg-number">
-            Registration No: <strong>{username}</strong>
-          </div>
-          <div className="timer">
-            ⏱ {formatTime()}
+    <div className="flex flex-col min-h-screen bg-background">
+      {/* Top Navigation Bar */}
+      <header className="h-16 border-b border-border bg-card flex items-center justify-between px-6 shrink-0">
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col">
+            <span className="text-sm font-medium text-foreground">Computer Networks - Midterm</span>
+            <span className="text-xs text-muted-foreground">ID: {studentId}</span>
           </div>
         </div>
 
-        <div className="question-box">
-          <h3>
-            Question {current + 1}
-          </h3>
-          <img src={activeQuestion} alt={`Secure Question ${current + 1}`} style={{ maxWidth: '100%', height: 'auto', border: '1px solid #ccc' }} />
+        {/* Timer */}
+        <div className={`flex items-center gap-2 px-4 py-2 rounded-lg font-mono text-lg font-medium tracking-tight ${
+          timeLeft < 300 ? 'bg-destructive/10 text-destructive' : 'bg-muted text-foreground'
+        }`}>
+          <Clock className="h-5 w-5" />
+          {formatTime(timeLeft)}
         </div>
+      </header>
 
-        <div className="options-box">
-          {['A', 'B', 'C', 'D', 'E'].map(opt => (
-            <label key={opt} className="option-item">
-              <input
-                type="radio"
-                checked={answers[current] === opt}
-                onChange={() => handleAnswer(opt)}
-              />
-              Option {opt}
-            </label>
-          ))}
-        </div>
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col items-center p-6 lg:p-12 overflow-y-auto">
+        
+        {/* Violation Warning Toast */}
+        {showWarning && (
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-4 bg-destructive text-destructive-foreground px-6 py-3 rounded-xl shadow-lg flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5" />
+            <span className="font-medium text-sm">Warning: Activity recorded and reported.</span>
+          </div>
+        )}
 
-        <div className="navigation">
-          <button
-            disabled={current === 0}
-            onClick={() => setCurrent(current - 1)}
-          >
-            Prev
-          </button>
+        <div className="w-full max-w-4xl space-y-8">
+          
+          <div className="bg-card border border-border rounded-xl xl:rounded-3xl shadow-sm overflow-hidden select-none">
+            <div className="p-6 md:p-8">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <span className="bg-primary/10 text-primary text-xs font-semibold px-2.5 py-1 rounded-md">
+                    Question {currentQuestionIndex + 1} of {totalQuestions || '?'}
+                  </span>
+                  <span className="text-sm text-muted-foreground">Multiple Choice</span>
+                </div>
+                
+                <button 
+                  onClick={() => fetchQuestion(currentQuestionIndex)}
+                  className="p-2 text-muted-foreground hover:bg-muted rounded-full transition-colors"
+                  title="Reload Question"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </button>
+              </div>
+              
+              {/* Question Render Area */}
+              <div className="w-full bg-muted/30 rounded-lg md:rounded-xl border border-border/50 flex flex-col items-center justify-center p-4 text-center mb-8 relative group min-h-[300px]">
+                {isLoading ? (
+                  <div className="flex flex-col items-center text-primary gap-4">
+                    <Loader2 className="h-10 w-10 animate-spin" />
+                    <p className="text-sm font-medium text-muted-foreground">Verifying Context & Decrypting Chunk...</p>
+                  </div>
+                ) : errorMsg ? (
+                  <div className="flex flex-col items-center text-destructive gap-3 max-w-sm px-4">
+                    <AlertTriangle className="h-10 w-10" />
+                    <p className="font-medium">{errorMsg}</p>
+                    <p className="text-xs text-muted-foreground">Make sure location services are enabled and you are inside the authorized geofence.</p>
+                  </div>
+                ) : questionImage ? (
+                  <img 
+                    src={questionImage} 
+                    alt="Secure Exam Question" 
+                    className="max-w-full h-auto rounded-lg shadow-sm border border-border/50"
+                    onContextMenu={(e) => e.preventDefault()}
+                    draggable="false"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center">
+                    <ShieldAlert className="h-12 w-12 text-muted-foreground/30 mb-4" />
+                    <p className="text-muted-foreground font-medium">Secured Question Render Area</p>
+                  </div>
+                )}
+                
+                {/* Visual Security Overlay */}
+                <div className="absolute inset-0 pointer-events-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSI0IiBmaWxsPSIjZmZmIiBmaWxsLW9wYWNpdHk9IjAiLz4KPHJlY3QgeD0iMCIgeT0iMCIgd2lkdGg9IjEiIGhlaWdodD0iMSIgZmlsbD0iIzAwMCIgZmlsbC1vcGFjaXR5PSIwLjA1Ii8+Cjwvc3ZnPg==')] opacity-50 mix-blend-overlay"></div>
+              </div>
 
-          {current < totalQuestions - 1 ? (
-            <button onClick={() => setCurrent(current + 1)}>
-              Next
-            </button>
-          ) : (
-            <button className="submit" onClick={() => setPage("submitted")}>
-              Submit
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* RIGHT PALETTE */}
-      <div className="question-palette">
-        <h4>Questions</h4>
-        <div className="palette-grid">
-          {Array.from({ length: totalQuestions }).map((_, index) => (
-            <div
-              key={index}
-              className={`palette-item ${
-                answers[index] ? "attempted" : ""
-              }`}
-              onClick={() => setCurrent(index)}
-            >
-              {index + 1}
+              {/* Static Answer Options */}
+              <div className="grid gap-3">
+                {['A', 'B', 'C', 'D', 'E'].map((option) => (
+                  <label key={option} className={`flex items-center gap-4 p-4 rounded-xl border transition-colors group cursor-pointer ${
+                    selectedAnswer === option 
+                      ? 'bg-primary/5 border-primary' 
+                      : 'border-border bg-background hover:bg-muted/50'
+                  }`}>
+                    <div className="relative flex items-center justify-center">
+                      <input 
+                        type="radio" 
+                        name="answer" 
+                        value={option}
+                        checked={selectedAnswer === option}
+                        onChange={(e) => setSelectedAnswer(e.target.value)}
+                        className="peer sr-only" 
+                      />
+                      <div className={`h-5 w-5 rounded-full border transition-all ${
+                        selectedAnswer === option
+                          ? 'border-[6px] border-primary'
+                          : 'border-border'
+                      }`}></div>
+                    </div>
+                    <span className="font-medium text-foreground">Option {option}</span>
+                  </label>
+                ))}
+              </div>
             </div>
-          ))}
-        </div>
-      </div>
 
+            {/* Actions */}
+            <div className="bg-muted/30 border-t border-border p-4 px-6 md:px-8 flex items-center justify-between">
+              <button 
+                onClick={handlePrev}
+                disabled={currentQuestionIndex === 0 || isLoading}
+                className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-4 py-2 rounded-lg disabled:opacity-50"
+              >
+                Previous
+              </button>
+              
+              <button 
+                onClick={currentQuestionIndex >= totalQuestions - 1 ? handleSubmitExam : handleNext}
+                disabled={isLoading}
+                className="bg-primary text-primary-foreground text-sm font-medium px-6 py-2.5 rounded-xl shadow-sm hover:bg-primary/90 transition-colors active:scale-[0.98] disabled:opacity-50"
+              >
+                {currentQuestionIndex >= totalQuestions - 1 ? 'Finish & Submit Exam' : 'Save & Next'}
+              </button>
+            </div>
+          </div>
+
+          {/* Violations Debug List */}
+          {violations.length > 0 && (
+            <div className="bg-destructive/5 border border-destructive/20 rounded-xl p-6">
+              <h3 className="text-sm font-semibold text-destructive mb-3 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4" />
+                Detected Violations (Debug View)
+              </h3>
+              <ul className="space-y-2">
+                {violations.map((v, i) => (
+                  <li key={i} className="text-sm text-foreground flex justify-between items-center py-1 border-b border-border/50 last:border-0">
+                    <span>{v.type}</span>
+                    <span className="text-muted-foreground text-xs font-mono bg-background px-2 py-1 rounded-md border border-border/50">{v.timestamp}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+        </div>
+      </main>
     </div>
   );
 }
-
-export default Exam;

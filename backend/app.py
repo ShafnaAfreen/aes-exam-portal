@@ -49,10 +49,55 @@ def init_db():
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            violations TEXT NOT NULL,
+            submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            q TEXT NOT NULL,
+            options TEXT NOT NULL
+        )
+    """)
+
+    # Seed default questions if empty
+    c.execute("SELECT COUNT(*) FROM questions")
+    if c.fetchone()[0] == 0:
+        default_qs = [
+            ("Distance between two shafts shall not be less than ____?", '["7 M", "10.5 M", "13.5 M", "15.5 M", "18.5 M"]'),
+            ("What is AES?", '["Hash", "Encryption", "Protocol", "Network", "Database"]'),
+            ("Define Zero Trust.", '["Firewall", "Always Verify", "VPN", "Server", "Client"]')
+        ]
+        c.executemany("INSERT INTO questions (q, options) VALUES (?, ?)", default_qs)
+
     conn.commit()
     conn.close()
 
+QUESTION_CHUNKS = []
+
+def load_questions_from_db():
+    global QUESTION_CHUNKS
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT id, q, options FROM questions ORDER BY id ASC")
+    rows = c.fetchall()
+    QUESTION_CHUNKS = []
+    for r in rows:
+        QUESTION_CHUNKS.append({
+            "id": r[0],
+            "q": r[1],
+            "options": json.loads(r[2])
+        })
+    conn.close()
+
 init_db()
+load_questions_from_db()
 
 # ==========================
 # REGISTER USER (one-time setup)
@@ -86,23 +131,30 @@ def register():
 # QUESTIONS (chunk source)
 # ==========================
 
-QUESTION_CHUNKS = [
-    {
-        "id": 1,
-        "q": "Distance between two shafts shall not be less than ____?",
-        "options": ["7 M", "10.5 M", "13.5 M", "15.5 M", "18.5 M"]
-    },
-    {
-        "id": 2,
-        "q": "What is AES?",
-        "options": ["Hash", "Encryption", "Protocol", "Network", "Database"]
-    },
-    {
-        "id": 3,
-        "q": "Define Zero Trust.",
-        "options": ["Firewall", "Always Verify", "VPN", "Server", "Client"]
-    }
-]
+@app.route("/api/admin/add_question", methods=["POST"])
+def add_question():
+    data = request.json or {}
+    q_text = data.get("title")
+    options = []
+    for opt in ['A', 'B', 'C', 'D', 'E']:
+        val = data.get(f"opt{opt}")
+        if val:
+            options.append(val)
+            
+    if not q_text or len(options) < 2:
+        return jsonify({"message": "Question text and at least 2 options required"}), 400
+        
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("INSERT INTO questions (q, options) VALUES (?, ?)", (q_text, json.dumps(options)))
+    conn.commit()
+    conn.close()
+    
+    load_questions_from_db()
+    
+    return jsonify({"message": "Question added successfully", "total_questions": len(QUESTION_CHUNKS)})
+
+
 # ==========================
 # LOGIN
 # ==========================
@@ -362,6 +414,39 @@ def decode_leak():
     except Exception as e:
         print(f"Decode Error: {e}")
         return jsonify({"message": f"Error decoding image: {str(e)}"}), 500
+
+@app.route("/api/submit_exam", methods=["POST"])
+def submit_exam():
+    data = request.json or {}
+    student_id = data.get("student_id")
+    violations = data.get("violations", [])
+    if not student_id:
+        return jsonify({"message": "student_id required"}), 400
+    
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("INSERT INTO submissions (student_id, violations) VALUES (?, ?)", (student_id, json.dumps(violations)))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Exam submitted successfully"})
+
+@app.route("/api/admin/submissions", methods=["GET"])
+def get_submissions():
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT student_id, violations, submitted_at FROM submissions ORDER BY submitted_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    
+    results = []
+    for r in rows:
+        results.append({
+            "student_id": r[0],
+            "violations": json.loads(r[1]),
+            "submitted_at": r[2]
+        })
+    return jsonify(results)
+
 
 
 if __name__ == "__main__":
