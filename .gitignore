@@ -1,0 +1,79 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ============================================================
+# Virtual Environments
+# ============================================================
+stegastamp_service/stega_env/
+stegastamp_service/venv_37/
+venv/
+env/
+.venv/
+.env/
+
+# ============================================================
+# Large Model Files (download instructions in README.md)
+# ============================================================
+# Pretrained encoder model (~207 MB)
+stegastamp_service/StegaStamp/saved_models/stegastamp_pretrained.zip
+stegastamp_service/StegaStamp/saved_models/stegastamp_pretrained.zip.*
+
+# Pretrained detector model (~110 MB)
+stegastamp_service/StegaStamp/detector_models/stegastamp_detector.zip
+stegastamp_service/StegaStamp/detector_models/stegastamp_detector.zip.*
+
+# Extracted model directories (re-created at runtime)
+stegastamp_service/StegaStamp/saved_models/stegastamp_pretrained/
+stegastamp_service/StegaStamp/detector_models/stegastamp_detector/
+
+# ============================================================
+# Database files
+# ============================================================
+backend/users.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# Test / scratch images (root level)
+# ============================================================
+stegastamp3.jpeg
+stegatest.png
+stegatest2.png
+stegatest4.jpeg
+stegatest5.jpeg
+
+# ============================================================
+# Frontend
+# ============================================================
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env
+
+# ============================================================
+# Environment & secrets
+# ============================================================
+.env
+.env.*
+*.pem
+*.key
+
+# ============================================================
+# OS / Editor
+# ============================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/

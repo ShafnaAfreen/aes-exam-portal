@@ -9,7 +9,7 @@ function Login({ setPage, setUsername }) {
     const username = usernameInput.trim();
     const passwordInput = password.trim();
 
-    const res = await fetch("http://localhost:5001/login", {
+    const res = await fetch("http://localhost:5000/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"

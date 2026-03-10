@@ -102,7 +102,9 @@ function Exam({ username, setPage }) {
       const plaintext = new TextDecoder().decode(decryptedBuffer);
       wipeBytes(bindingKeyBytes);
       wipeBytes(chunkKeyBytes);
-      return JSON.parse(plaintext);
+      // The decrypted text is the raw base64 string of the image.
+      // We prepend the data URI scheme to render it directly in an <img> tag.
+      return `data:image/png;base64,${plaintext}`;
     } finally {
       wipeBytes(saltBytes);
       wipeBytes(keyNonceBytes);
@@ -159,7 +161,7 @@ function Exam({ username, setPage }) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    fetch("http://localhost:5001/questions/meta", { signal: controller.signal })
+    fetch("http://localhost:5000/questions/meta", { signal: controller.signal })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -173,7 +175,7 @@ function Exam({ username, setPage }) {
       })
       .catch((err) => {
         if (err?.name === "AbortError") {
-          setChunkError("Backend not reachable (meta timeout). Check backend server on port 5001.");
+          setChunkError("Backend not reachable (meta timeout). Check backend server on port 5000.");
           return;
         }
         setChunkError(err?.message || "Failed to load exam metadata");
@@ -196,7 +198,7 @@ function Exam({ username, setPage }) {
     setActiveQuestion(null);
     setChunkError("");
 
-    fetch(`http://localhost:5001/questions/chunk/${current}`, {
+    fetch(`http://localhost:5000/questions/chunk/${current}`, {
       headers: {
         "X-Registration-No": username,
         "X-Device-Id": deviceId,
@@ -304,18 +306,18 @@ useEffect(() => {
           <h3>
             Question {current + 1}
           </h3>
-          <p>{activeQuestion.q}</p>
+          <img src={activeQuestion} alt={`Secure Question ${current + 1}`} style={{ maxWidth: '100%', height: 'auto', border: '1px solid #ccc' }} />
         </div>
 
         <div className="options-box">
-          {activeQuestion.options.map(opt => (
+          {['A', 'B', 'C', 'D', 'E'].map(opt => (
             <label key={opt} className="option-item">
               <input
                 type="radio"
                 checked={answers[current] === opt}
                 onChange={() => handleAnswer(opt)}
               />
-              {opt}
+              Option {opt}
             </label>
           ))}
         </div>

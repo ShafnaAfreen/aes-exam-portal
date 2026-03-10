@@ -1,0 +1,3 @@
+[submodule "stegastamp_service/StegaStamp"]
+	path = stegastamp_service/StegaStamp
+	url = https://github.com/ytfrdfiw/StegaStamp.git

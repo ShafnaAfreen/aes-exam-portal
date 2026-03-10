@@ -30,7 +30,7 @@ ALLOWED_RADIUS_METERS = 1000
 # Update these values for each exam slot.
 EXAM_TIMEZONE = "Asia/Kolkata"
 EXAM_START_LOCAL = "2026-03-08 10:00:00"
-EXAM_END_LOCAL = "2026-03-08 15:00:00"
+EXAM_END_LOCAL = "2026-03-13 15:00:00"
 
 
 # ==========================
@@ -225,10 +225,10 @@ def encrypted_question_chunk(index):
     if exam_error:
         return exam_error
 
-    ttl_ms = 250
+    ttl_ms = 30000  # 30 seconds - enough time for StegaStamp encoding
     expires_at_ms = int(time.time() * 1000) + ttl_ms
     time_window = int(time.time() // 30)
-    question_bytes = json.dumps(QUESTION_CHUNKS[index]).encode("utf-8")
+    
     reg_no = (request.headers.get("X-Registration-No") or "").strip()
     device_id = (request.headers.get("X-Device-Id") or "").strip()
     geo_lat_raw = (request.headers.get("X-Geo-Lat") or "").strip()
@@ -237,6 +237,30 @@ def encrypted_question_chunk(index):
     if not reg_no or not device_id or not geo_lat_raw or not geo_lon_raw:
         return jsonify({"message": "Missing binding headers"}), 400
 
+    # Generate the grainy canvas image (base64)
+    from utils.image_utils import create_grainy_canvas
+    import requests
+    
+    original_b64 = create_grainy_canvas(QUESTION_CHUNKS[index])
+    
+    # Query the StegaStamp microservice
+    try:
+        stega_response = requests.post("http://localhost:5001/encode", json={
+            "image_b64": original_b64,
+            "student_id": reg_no
+        }, timeout=5.0)
+        stega_response.raise_for_status()
+        watermarked_b64 = stega_response.json().get("watermarked_image_b64")
+        if not watermarked_b64:
+            raise ValueError("No watermarked image returned from microservice")
+            
+        # The frontend will receive the encrypted bytes of this base64 string
+        # It shouldn't receive JSON anymore, just the image string to display
+        question_bytes = watermarked_b64.encode("utf-8")
+        
+    except Exception as e:
+        print(f"StegaStamp Integration Error: {e}")
+        return jsonify({"message": "Error generating secure image chunk"}), 500
     try:
         geo_lat = float(geo_lat_raw)
         geo_lon = float(geo_lon_raw)
@@ -301,6 +325,44 @@ def encrypted_question_chunk(index):
 def home():
     return "Backend Running"
 
+# ==========================
+# ADMIN FORENSICS
+# ==========================
+@app.route("/api/admin/decode_leak", methods=["POST"])
+def decode_leak():
+    """
+    Receives an uploaded photo (e.g. cropped image of the leaked question)
+    and sends it to the StegaStamp microservice to extract the student ID.
+    Expects JSON: { "image_b64": "..." }
+    """
+    data = request.json or {}
+    image_b64 = data.get("image_b64")
+    
+    if not image_b64:
+        return jsonify({"message": "No image provided"}), 400
+        
+    try:
+        import requests
+        # Query the StegaStamp microservice
+        stega_response = requests.post("http://localhost:5001/decode", json={
+            "image_b64": image_b64
+        }, timeout=10.0)
+        
+        stega_response.raise_for_status()
+        extracted_id = stega_response.json().get("extracted_student_id")
+        
+        if extracted_id:
+            return jsonify({
+                "message": "Decoding successful",
+                "extracted_student_id": extracted_id
+            })
+        else:
+            return jsonify({"message": "Could not decode any watermark."})
+            
+    except Exception as e:
+        print(f"Decode Error: {e}")
+        return jsonify({"message": f"Error decoding image: {str(e)}"}), 500
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+    app.run(host="0.0.0.0", port=5000)
